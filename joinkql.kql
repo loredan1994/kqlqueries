@@ -1,0 +1,35 @@
+resources
+| where type =~ "microsoft.web/sites"
+// 1. Filter for your specific app here
+| where name =~ "YOUR-APP-SERVICE-NAME"
+| extend vnetSubnetId = tostring(properties.virtualNetworkSubnetId)
+| extend peConnections = properties.privateEndpointConnections
+// 2. Expand Private Endpoints (handles cases where you have multiple)
+| mv-expand peConnections
+| extend peId = tostring(peConnections.properties.privateEndpoint.id)
+// 3. JOIN: Get the Network Interface ID from the Private Endpoint
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/privateendpoints"
+    | mv-expand networkInterfaces = properties.networkInterfaces
+    | project peId = id, nicId = tostring(networkInterfaces.id)
+) on peId
+// 4. JOIN: Get the actual Private IP from the Network Interface
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/networkinterfaces"
+    | mv-expand ipConfigs = properties.ipConfigurations
+    | project nicId = id, Inbound_Private_IP = tostring(ipConfigs.properties.privateIPAddress)
+) on nicId
+// 5. JOIN: Get the Outbound Subnet CIDR (e.g., /24) from the VNet Subnet ID
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/virtualnetworks"
+    | mv-expand subnets = properties.subnets
+    | project vnetSubnetId = tostring(subnets.id), Outbound_Subnet_Range = tostring(subnets.properties.addressPrefix)
+) on vnetSubnetId
+// 6. Clean up the final presentation
+| project 
+    Resource_Name = name, 
+    Inbound_Private_IP = iif(isnotempty(Inbound_Private_IP), Inbound_Private_IP, "No Private Endpoint"),
+    Outbound_Subnet_Range = iif(isnotempty(Outbound_Subnet_Range), Outbound_Subnet_Range, "No VNet Integration")
