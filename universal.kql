@@ -1,0 +1,47 @@
+resources
+// 1. Filter by Name first (fastest way to find ANY resource type)
+| where name =~ "YOUR-RESOURCE-NAME"
+// 2. Filter to common types that use Private Endpoints (avoids noise)
+| where type in~ (
+    "microsoft.web/sites", 
+    "microsoft.sql/servers", 
+    "microsoft.storage/storageaccounts", 
+    "microsoft.keyvault/vaults",
+    "microsoft.network/privateendpoints"
+)
+// 3. Normalize "Outbound" logic (Only App Services have this)
+| extend OutboundSubnetId = case(
+    type =~ "microsoft.web/sites", tostring(properties.virtualNetworkSubnetId),
+    "N/A (PaaS Data Resource)"
+)
+// 4. Normalize "Inbound" logic (Standard across all PaaS)
+| extend peConnections = properties.privateEndpointConnections
+| mv-expand peConnections
+| extend peId = tostring(peConnections.properties.privateEndpoint.id)
+// 5. JOIN: Get the Network Interface ID from the Private Endpoint
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/privateendpoints"
+    | mv-expand networkInterfaces = properties.networkInterfaces
+    | project peId = id, nicId = tostring(networkInterfaces.id)
+) on peId
+// 6. JOIN: Get the actual Private IP from the Network Interface
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/networkinterfaces"
+    | mv-expand ipConfigs = properties.ipConfigurations
+    | project nicId = id, Inbound_Private_IP = tostring(ipConfigs.properties.privateIPAddress)
+) on nicId
+// 7. JOIN: Get Outbound Subnet Range (Only if OutboundSubnetId exists)
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/virtualnetworks"
+    | mv-expand subnets = properties.subnets
+    | project OutboundSubnetId = tostring(subnets.id), Outbound_Range = tostring(subnets.properties.addressPrefix)
+) on OutboundSubnetId
+// 8. Final Clean Output
+| project 
+    Resource_Name = name,
+    Resource_Type = type,
+    Inbound_Private_IP = iif(isnotempty(Inbound_Private_IP), Inbound_Private_IP, "No Private Endpoint"),
+    Outbound_Subnet = iif(OutboundSubnetId == "N/A (PaaS Data Resource)", "N/A (Not Applicable)", iif(isnotempty(Outbound_Range), Outbound_Range, "No VNet Integration"))
