@@ -4,7 +4,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## 🔭 SRE Cross-Subscription Dashboard\n\n**Architecture:**\n* **Discovery:** Scans **App Subscriptions** to find valid Apps and Regions based on `rg-<app>-<env>-<region>` naming.\n* **Data:** Queries the selected **Log Analytics Workspace** (which can be in a totally different subscription) for the actual telemetry.\n\n**Instructions:**\n1. Select **App Subscriptions** (Where your Resource Groups live).\n2. Select **Log Analytics Workspace** (Where your logs live).\n3. Pick the **App**."
+        "json": "## 🔭 SRE Cross-Subscription Dashboard (Fixed & Robust)\n\n**Instructions:**\n1. Select **App Subscriptions** (Where your Resource Groups live).\n2. Select **Log Analytics Workspace** (Where your logs live - can be anywhere).\n3. Pick the **App**."
       },
       "name": "text - instructions"
     },
@@ -20,7 +20,7 @@
             "id": "1f74ed9a-e3ed-4d8d-b5cc-4f0573900358",
             "version": "KqlParameterItem/1.0",
             "name": "AppSubscriptions",
-            "label": "1. App Subscriptions (Metadata Source)",
+            "label": "1. App Subscriptions (Where Apps Live)",
             "type": 6,
             "isRequired": true,
             "multiSelect": true,
@@ -95,7 +95,7 @@
             "type": 2,
             "isRequired": true,
             "multiSelect": false,
-            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n// REGEX: Matches 'rg-' then anything until it hits an environment tag\n| extend app = extract(@'^rg-(.+?)-(ut|st|pp|pr)-', 1, rg)\n| where isnotempty(app)\n| summarize by app\n| order by app asc\n| project value=app, label=app, selected=true",
+            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n// Parsing Logic: rg-{AppName}-{Env}-...\n| parse kind=regex rg with \"rg-\" AppName \"-(ut|st|pp|pr)-\" Rest\n| where isnotempty(AppName)\n| summarize by AppName\n| order by AppName asc\n| project value=AppName, label=AppName, selected=true",
             "crossComponentResources": [
               "{AppSubscriptions}"
             ],
@@ -134,7 +134,7 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n// 1. Filter by App Name (Approximate)\n| where resourceGroup contains '{App}'\n| extend rg = tolower(resourceGroup)\n// 2. Strict Regex to extract Env and Region\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rg)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rg)\n// 3. Filter by Selected Environment\n| where env in ({Env})\n| where isnotempty(region)\n| summarize by region\n| order by region asc\n| project value=region, label=region, selected=true",
+            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n| extend rg = tolower(resourceGroup)\n// 1. Broad Filter to speed up query\n| where rg has \"{App}\"\n// 2. Strict Parse to extract components\n| parse kind=regex rg with \"rg-\" AppName \"-(ut|st|pp|pr)-\" RegionName\n// 3. Match against selected parameters\n| where AppName == tolower(\"{App}\")\n| where EnvName in ({Env})\n| where isnotempty(RegionName)\n| summarize by RegionName\n| order by RegionName asc\n| project value=RegionName, label=RegionName, selected=true",
             "crossComponentResources": [
               "{AppSubscriptions}"
             ],
@@ -157,7 +157,7 @@
       "content": {
         "version": "KqlItem/1.0",
         "title": "Requests over time (Split by Env)",
-        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n// 1. Parse Resource ID from the Log Data\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n// 2. Filter: Does this log belong to the selected App Family?\n| where rgLower matches regex strcat('^rg-', appLower, '-(ut|st|pp|pr)-')\n// 3. Extract Env and Region from the Log's Resource Group Name\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rgLower)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rgLower)\n// 4. Apply Dashboard Filters\n| where env in ({Env})\n| where region in ({Region})\n// 5. Visualize\n| extend Env = toupper(env)\n| summarize Requests=sum(ItemCount) by bin(TimeGenerated, 5m), Env\n| order by TimeGenerated asc",
+        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n// 1. Parse Resource ID from the Log Data\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n// 2. Robust Parse of RG Name\n| parse kind=regex rg with \"rg-\" AppName \"-(ut|st|pp|pr)-\" RegionName\n// 3. Match App Name\n| where AppName == appLower\n// 4. Match Env and Region\n| where EnvName in ({Env})\n| where RegionName in ({Region})\n// 5. Visualize\n| extend Env = toupper(EnvName)\n| summarize Requests=sum(ItemCount) by bin(TimeGenerated, 5m), Env\n| order by TimeGenerated asc",
         "size": 4,
         "timeContextFromParameter": "TimeRange",
         "queryType": 0,
@@ -177,7 +177,7 @@
       "content": {
         "version": "KqlItem/1.0",
         "title": "Failure Rate % (Split by Env)",
-        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| where rgLower matches regex strcat('^rg-', appLower, '-(ut|st|pp|pr)-')\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rgLower)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rgLower)\n| where env in ({Env})\n| where region in ({Region})\n| extend Env = toupper(env)\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false) by bin(TimeGenerated, 5m), Env\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project TimeGenerated, Env, FailureRate",
+        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| parse kind=regex rg with \"rg-\" AppName \"-(ut|st|pp|pr)-\" RegionName\n| where AppName == appLower\n| where EnvName in ({Env})\n| where RegionName in ({Region})\n| extend Env = toupper(EnvName)\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false) by bin(TimeGenerated, 5m), Env\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project TimeGenerated, Env, FailureRate",
         "size": 4,
         "timeContextFromParameter": "TimeRange",
         "queryType": 0,
@@ -194,7 +194,7 @@
       "content": {
         "version": "KqlItem/1.0",
         "title": "Detailed Component Status (Drill-down)",
-        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend subscriptionId = extract(@\"/subscriptions/([^/]+)/\", 1, rid)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| where rgLower matches regex strcat('^rg-', appLower, '-(ut|st|pp|pr)-')\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rgLower)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rgLower)\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P95ms=percentile(DurationMs, 95) by subscriptionId, env, region, rg, ai\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project Subscription=subscriptionId, Env=toupper(env), Region=region, ResourceGroup=rg, AppInsightsResource=ai, Requests, Failures, FailureRate, P95ms=round(P95ms, 1)\n| order by Failures desc",
+        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend subscriptionId = extract(@\"/subscriptions/([^/]+)/\", 1, rid)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| parse kind=regex rgLower with \"rg-\" AppName \"-(ut|st|pp|pr)-\" RegionName\n| where AppName == appLower\n| where EnvName in ({Env})\n| where RegionName in ({Region})\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P95ms=percentile(DurationMs, 95) by subscriptionId, Env=toupper(EnvName), Region=RegionName, rg, ai\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project Subscription=subscriptionId, Env, Region, ResourceGroup=rg, AppInsightsResource=ai, Requests, Failures, FailureRate, P95ms=round(P95ms, 1)\n| order by Failures desc",
         "size": 4,
         "timeContextFromParameter": "TimeRange",
         "queryType": 0,
