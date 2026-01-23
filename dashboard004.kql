@@ -4,7 +4,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## 🔭 SRE Cross-Subscription Dashboard (Env/Region Auto-Detected)\n\n**Instructions:**\n1. Select **App Subscriptions** (Where your RGs live).\n2. Select **Log Analytics Workspace** (Logs can live in a different subscription).\n3. Pick the **App**, then **Env** and **Region**.\n\n*Legacy RGs without region are shown as `region=legacy`.*"
+        "json": "## 🔭 SRE Cross-Subscription Dashboard (Env/Region Auto-Detected)\n\n**Instructions:**\n1. Select **App Subscriptions** (Where your RGs live).\n2. Select **Log Analytics Workspace** (Logs can live in a different subscription).\n3. Pick the **App**, then **Env** and **Region**.\n4. **App Insights list auto-populates** from App Service Plans + RG scope (leave all selected).\n\n*Legacy RGs without region are shown as `region=legacy`.*"
       },
       "name": "text - instructions"
     },
@@ -147,6 +147,27 @@
             },
             "queryType": 1,
             "resourceType": "microsoft.resourcegraph/resources"
+          },
+          {
+            "id": "9c3a6a07-6f2b-4b1b-8d1f-7f2c8a6c8e13",
+            "version": "KqlParameterItem/1.0",
+            "name": "AppInsightsIds",
+            "label": "4. App Insights (Auto from App Service Plans + RGs)",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "let rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet plans = Resources\n| where type =~ 'microsoft.web/serverfarms'\n| extend rg = tolower(resourceGroup)\n| extend app = extract(rgPattern, 1, rg)\n| extend env = extract(rgPattern, 2, rg)\n| extend region = extract(rgPattern, 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where env in ({Env})\n| where region in ({Region})\n| project planId = tolower(id);\n\nlet sites = Resources\n| where type =~ 'microsoft.web/sites'\n| extend serverFarmId = tolower(tostring(properties.serverFarmId))\n| where isnotempty(serverFarmId)\n| join kind=inner (plans) on $left.serverFarmId == $right.planId\n| project siteId = tolower(id), siteName = name;\n\nlet appiFromTags = Resources\n| where type =~ 'microsoft.insights/components'\n| extend tags = todynamic(tags)\n| extend tagKeys = bag_keys(tags)\n| mv-expand tagKey = tagKeys\n| extend tagKeyLower = tolower(tostring(tagKey))\n| join kind=inner (sites) on $left.tagKeyLower == strcat('hidden-link:', $right.siteId)\n| project appiId = tolower(id), appiName = name;\n\nlet appiFromRg = Resources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n| extend app = extract(rgPattern, 1, rg)\n| extend env = extract(rgPattern, 2, rg)\n| extend region = extract(rgPattern, 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where env in ({Env})\n| where region in ({Region})\n| project appiId = tolower(id), appiName = name;\n\nappiFromTags\n| union appiFromRg\n| summarize by appiId, appiName\n| order by appiName asc\n| project value=appiId, label=appiName, selected=true",
+            "crossComponentResources": [
+              "{AppSubscriptions}"
+            ],
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            },
+            "queryType": 1,
+            "resourceType": "microsoft.resourcegraph/resources"
           }
         ],
         "style": "pills",
@@ -160,7 +181,7 @@
       "content": {
         "version": "KqlItem/1.0",
         "title": "Requests over time (Split by Env)",
-        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount) by bin(TimeGenerated, 5m), Env=toupper(env)\n| order by TimeGenerated asc",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount) by bin(TimeGenerated, 5m), Env=toupper(env)\n| order by TimeGenerated asc",
         "size": 4,
         "timeContextFromParameter": "TimeRange",
         "queryType": 0,
@@ -180,7 +201,7 @@
       "content": {
         "version": "KqlItem/1.0",
         "title": "Failure Rate % (Split by Env)",
-        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false) by bin(TimeGenerated, 5m), Env=toupper(env)\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project TimeGenerated, Env, FailureRate",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false) by bin(TimeGenerated, 5m), Env=toupper(env)\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project TimeGenerated, Env, FailureRate",
         "size": 4,
         "timeContextFromParameter": "TimeRange",
         "queryType": 0,
@@ -197,7 +218,7 @@
       "content": {
         "version": "KqlItem/1.0",
         "title": "Detailed Component Status (Drill-down)",
-        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend subscriptionId = extract(@\"/subscriptions/([^/]+)/\", 1, rid)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P95ms=percentile(DurationMs, 95) by subscriptionId, Env=toupper(env), Region=region, rg, ai\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project Subscription=subscriptionId, Env, Region, ResourceGroup=rg, AppInsightsResource=ai, Requests, Failures, FailureRate, P95ms=round(P95ms, 1)\n| order by Failures desc",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend subscriptionId = extract(@\"/subscriptions/([^/]+)/\", 1, rid)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P95ms=percentile(DurationMs, 95) by subscriptionId, Env=toupper(env), Region=region, rg, ai\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project Subscription=subscriptionId, Env, Region, ResourceGroup=rg, AppInsightsResource=ai, Requests, Failures, FailureRate, P95ms=round(P95ms, 1)\n| order by Failures desc",
         "size": 4,
         "timeContextFromParameter": "TimeRange",
         "queryType": 0,
@@ -243,6 +264,223 @@
     {
       "type": 1,
       "content": {
+        "json": "## ✅ Golden signals (same filters, more signal)\n\nYou already have traffic + error rate over time.\n\nBelow adds:\n- **Env/Region rollups** (what's hot right now)\n- **Latency percentiles** (p50/p95/p99)\n- **Top failing + top slow endpoints** (so you can actually act)\n"
+      },
+      "name": "text - golden-signals"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Env/Region rollup (Requests, FailureRate, Latency p50/p95/p99, LastSeen)",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P50ms=percentile(DurationMs, 50), P95ms=percentile(DurationMs, 95), P99ms=percentile(DurationMs, 99), LastSeen=max(TimeGenerated) by Env=toupper(env), Region=region\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project Env, Region, LastSeen, Requests, Failures, FailureRate, P50ms=round(P50ms,1), P95ms=round(P95ms,1), P99ms=round(P99ms,1)\n| order by Env asc, Region asc",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 1000
+        }
+      },
+      "name": "query - env-region-rollup"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Latency percentiles by Service (p50/p95/p99) — sorted by p95",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real, AppRoleName:string, cloud_RoleName:string)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P50ms=percentile(DurationMs, 50), P95ms=percentile(DurationMs, 95), P99ms=percentile(DurationMs, 99) by Env=toupper(env), Region=region, Service\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project Env, Region, Service, Requests, Failures, FailureRate, P50ms=round(P50ms,1), P95ms=round(P95ms,1), P99ms=round(P99ms,1)\n| where Requests > 0\n| order by P95ms desc\n| take 100",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 1000
+        }
+      },
+      "name": "query - latency-by-service"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Top failing endpoints (by Failures) — Service + Request name",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real, Name:string, AppRoleName:string, cloud_RoleName:string)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| extend RequestName = tostring(column_ifexists('Name','(unknown)'))\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P95ms=percentile(DurationMs, 95) by Env=toupper(env), Region=region, Service, RequestName\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| where Requests > 0\n| order by Failures desc, FailureRate desc\n| take 50\n| project Env, Region, Service, RequestName, Requests, Failures, FailureRate, P95ms=round(P95ms,1)",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 500
+        }
+      },
+      "name": "query - top-failing-endpoints"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Top slow endpoints (by p95 latency) — Service + Request name (min 20 requests)",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppRequests, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real, Name:string, AppRoleName:string, cloud_RoleName:string)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| extend RequestName = tostring(column_ifexists('Name','(unknown)'))\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P50ms=percentile(DurationMs, 50), P95ms=percentile(DurationMs, 95), P99ms=percentile(DurationMs, 99) by Env=toupper(env), Region=region, Service, RequestName\n| where Requests >= 20\n| extend FailureRate = round(100.0 * todouble(Failures) / todouble(Requests), 2)\n| order by P95ms desc\n| take 50\n| project Env, Region, Service, RequestName, Requests, FailureRate, P50ms=round(P50ms,1), P95ms=round(P95ms,1), P99ms=round(P99ms,1)",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 500
+        }
+      },
+      "name": "query - top-slow-endpoints"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🔗 Dependencies (what your app is waiting on)\n\nThis is usually where the real drama lives: SQL, storage, service bus, external APIs.\n\nThese queries use **AppDependencies** and keep the exact same App/Env/Region scoping."
+      },
+      "name": "text - dependencies"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Top failing dependencies (Service → Target) — by failures",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppDependencies, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real, Name:string, Target:string, Type:string, AppRoleName:string, cloud_RoleName:string)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| extend DepType = tostring(column_ifexists('Type',''))\n| extend DepTarget = tostring(coalesce(column_ifexists('Target',''), column_ifexists('Name','(unknown)')))\n| summarize Calls=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P95ms=percentile(DurationMs, 95) by Env=toupper(env), Region=region, Service, DepType, DepTarget\n| where Calls > 0\n| extend FailureRate = round(100.0 * todouble(Failures) / todouble(Calls), 2)\n| order by Failures desc, FailureRate desc\n| take 50\n| project Env, Region, Service, DepType, DepTarget, Calls, Failures, FailureRate, P95ms=round(P95ms,1)",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 500
+        }
+      },
+      "name": "query - top-failing-dependencies"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Top slow dependencies (Service → Target) — by p95 latency (min 20 calls)",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppDependencies, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real, Name:string, Target:string, Type:string, AppRoleName:string, cloud_RoleName:string)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| extend DepType = tostring(column_ifexists('Type',''))\n| extend DepTarget = tostring(coalesce(column_ifexists('Target',''), column_ifexists('Name','(unknown)')))\n| summarize Calls=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P50ms=percentile(DurationMs, 50), P95ms=percentile(DurationMs, 95), P99ms=percentile(DurationMs, 99) by Env=toupper(env), Region=region, Service, DepType, DepTarget\n| where Calls >= 20\n| extend FailureRate = round(100.0 * todouble(Failures) / todouble(Calls), 2)\n| order by P95ms desc\n| take 50\n| project Env, Region, Service, DepType, DepTarget, Calls, FailureRate, P50ms=round(P50ms,1), P95ms=round(P95ms,1), P99ms=round(P99ms,1)",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 500
+        }
+      },
+      "name": "query - top-slow-dependencies"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 💥 Exceptions & Traces (what actually broke)\n\nIf dependencies are the why, exceptions/traces are the how.\n\nThese pull from **AppExceptions** and **AppTraces**."
+      },
+      "name": "text - exceptions-traces"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Top exceptions (Env/Region/Service) — by count",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppExceptions, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Type:string, ExceptionType:string, OuterMessage:string, Message:string, InnermostMessage:string, AppRoleName:string, cloud_RoleName:string)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| extend ExType = tostring(coalesce(column_ifexists('Type',''), column_ifexists('ExceptionType','(unknown)')))\n| extend ExMsgRaw = tostring(coalesce(column_ifexists('OuterMessage',''), column_ifexists('Message',''), column_ifexists('InnermostMessage','')))\n| extend ExMsg = substring(ExMsgRaw, 0, 180)\n| summarize Exceptions=sum(ItemCount) by Env=toupper(env), Region=region, Service, ExType, ExMsg\n| order by Exceptions desc\n| take 50",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 500
+        }
+      },
+      "name": "query - top-exceptions"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Latest error traces (SeverityLevel >= 3) — most recent first",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet base = union isfuzzy=true AppTraces, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Message:string, SeverityLevel:int, AppRoleName:string, cloud_RoleName:string)[]);\nlet scoped = base\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region});\nscoped\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| extend Sev = toint(column_ifexists('SeverityLevel', -1))\n| where Sev >= 3\n| project TimeGenerated, Env=toupper(env), Region=region, Service, SeverityLevel=Sev, Message=substring(tostring(column_ifexists('Message','')), 0, 220)\n| order by TimeGenerated desc\n| take 200",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 200
+        }
+      },
+      "name": "query - error-traces"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🧬 Correlation drilldown (Failed requests ↔ Dependencies ↔ Exceptions)\n\nThis correlates by **OperationId**. If correlation IDs aren't propagated consistently, this table will look weaker — that is an instrumentation problem, not a workbook problem."
+      },
+      "name": "text - correlation"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Correlated failures (top 50 failed operations)",
+        "query": "let appLower = tolower('{App}');\nlet rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet Req = union isfuzzy=true AppRequests, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real, Name:string, ResultCode:string, OperationId:string, operation_Id:string, AppRoleName:string, cloud_RoleName:string)[]);\nlet Dep = union isfuzzy=true AppDependencies, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Success:bool, DurationMs:real, Name:string, Target:string, Type:string, OperationId:string, operation_Id:string)[]);\nlet Ex  = union isfuzzy=true AppExceptions, (datatable(TimeGenerated:datetime, _ResourceId:string, ItemCount:int, Type:string, ExceptionType:string, OuterMessage:string, Message:string, OperationId:string, operation_Id:string)[]);\n\nlet reqScoped = Req\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| extend OpId = coalesce(tostring(column_ifexists('OperationId','')), tostring(column_ifexists('operation_Id','')))\n| where Success == false and OpId != ''\n| extend Service = coalesce(tostring(column_ifexists('AppRoleName','')), tostring(column_ifexists('cloud_RoleName','')), ai)\n| summarize FailedRequests=sum(ItemCount), ReqP95ms=percentile(DurationMs,95), LastFail=max(TimeGenerated), Request=take_any(tostring(column_ifexists('Name',''))), ResultCode=take_any(tostring(column_ifexists('ResultCode',''))), Service=take_any(Service), AppInsights=take_any(ai), ResourceGroup=take_any(rg), Env=take_any(env), Region=take_any(region)\n  by OpId\n| top 50 by FailedRequests desc;\n\nlet depAgg = Dep\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| extend OpId = coalesce(tostring(column_ifexists('OperationId','')), tostring(column_ifexists('operation_Id','')))\n| where OpId != ''\n| extend DepTarget = tostring(coalesce(column_ifexists('Target',''), column_ifexists('Name','(unknown)')))\n| summarize DepCalls=sum(ItemCount), DepFailures=sumif(ItemCount, Success == false), WorstDep=take_anyif(DepTarget, Success == false) by OpId;\n\nlet exAgg = Ex\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| where rid in ({AppInsightsIds})\n| extend rg = extract(@'/resourcegroups/([^/]+)/', 1, rid)\n| extend ai = extract(@'/providers/microsoft.insights/components/([^/]+)$', 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| extend app = extract(rgPattern, 1, rgLower)\n| extend env = extract(rgPattern, 2, rgLower)\n| extend region = extract(rgPattern, 3, rgLower)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == appLower\n| where env in ({Env})\n| where region in ({Region})\n| extend OpId = coalesce(tostring(column_ifexists('OperationId','')), tostring(column_ifexists('operation_Id','')))\n| where OpId != ''\n| extend ExType = tostring(coalesce(column_ifexists('Type',''), column_ifexists('ExceptionType','(unknown)')))\n| extend ExMsg = substring(tostring(coalesce(column_ifexists('OuterMessage',''), column_ifexists('Message',''))), 0, 160)\n| summarize ExceptionCount=sum(ItemCount), TopException=take_any(ExType), TopExceptionMsg=take_any(ExMsg) by OpId;\n\nreqScoped\n| join kind=leftouter depAgg on OpId\n| join kind=leftouter exAgg on OpId\n| extend DepFailureRate = round(100.0 * todouble(DepFailures) / iif(DepCalls==0, 1.0, todouble(DepCalls)), 2)\n| project LastFail, Env=toupper(Env), Region=Region, Service, AppInsights, Request, ResultCode, FailedRequests, ReqP95ms=round(ReqP95ms,1), DepCalls, DepFailures, DepFailureRate, WorstDep, ExceptionCount, TopException, TopExceptionMsg, OperationId=OpId\n| order by FailedRequests desc",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "filter": true,
+          "rowLimit": 200
+        }
+      },
+      "name": "query - correlated-failures"
+    },
+    {
+      "type": 1,
+      "content": {
         "json": "## 🧩 Resource inventory (Functions/App Services/Logic Apps/Storage/SQL)\n\nThis inventory is pulled from Azure Resource Graph and respects the same App/Env/Region filters."
       },
       "name": "text - resource-inventory"
@@ -252,7 +490,7 @@
       "content": {
         "version": "KqlItem/1.0",
         "title": "Resource inventory in scope (Function Apps, App Services, Logic Apps, Storage, SQL)",
-        "query": "Resources\n| extend rg = tolower(resourceGroup)\n| extend app = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 1, rg)\n| extend env = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 2, rg)\n| extend region = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where env in ({Env})\n| where region in ({Region})\n| where type in~ (\n  'microsoft.web/sites',\n  'microsoft.web/serverfarms',\n  'microsoft.logic/workflows',\n  'microsoft.storage/storageaccounts',\n  'microsoft.sql/servers',\n  'microsoft.sql/servers/databases'\n)\n| extend ResourceKind = case(\n  type =~ 'microsoft.logic/workflows', 'logicapp',\n  type =~ 'microsoft.web/serverfarms', 'appserviceplan',\n  type =~ 'microsoft.web/sites' and kind has 'functionapp', 'functionapp',\n  type =~ 'microsoft.web/sites', 'appservice',\n  type =~ 'microsoft.storage/storageaccounts', 'storage',\n  type =~ 'microsoft.sql/servers/databases', 'sql-db',\n  type =~ 'microsoft.sql/servers', 'sql-server',\n  type\n)\n| project subscriptionId, Env=toupper(env), Region=region, resourceGroup, ResourceKind, type, kind, name, location, id\n| order by Env asc, Region asc, ResourceKind asc, name asc",
+        "query": "let rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$';\nlet plans = Resources\n| where type =~ 'microsoft.web/serverfarms'\n| extend rg = tolower(resourceGroup)\n| extend app = extract(rgPattern, 1, rg)\n| extend env = extract(rgPattern, 2, rg)\n| extend region = extract(rgPattern, 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where env in ({Env})\n| where region in ({Region})\n| project planId = tolower(id), PlanName = name, PlanEnv = env, PlanRegion = region;\n\nlet sites = Resources\n| where type =~ 'microsoft.web/sites'\n| extend serverFarmId = tolower(tostring(properties.serverFarmId))\n| where isnotempty(serverFarmId)\n| join kind=inner (plans) on $left.serverFarmId == $right.planId\n| extend ResourceKind = iif(kind has 'functionapp', 'functionapp', 'appservice')\n| project subscriptionId, Env=toupper(PlanEnv), Region=PlanRegion, resourceGroup, ResourceKind, type, kind, name, location, id, Plan=PlanName;\n\nlet otherResources = Resources\n| extend rg = tolower(resourceGroup)\n| extend app = extract(rgPattern, 1, rg)\n| extend env = extract(rgPattern, 2, rg)\n| extend region = extract(rgPattern, 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where env in ({Env})\n| where region in ({Region})\n| where type in~ (\n  'microsoft.web/serverfarms',\n  'microsoft.logic/workflows',\n  'microsoft.storage/storageaccounts',\n  'microsoft.sql/servers',\n  'microsoft.sql/servers/databases'\n)\n| extend ResourceKind = case(\n  type =~ 'microsoft.web/serverfarms', 'appserviceplan',\n  type =~ 'microsoft.logic/workflows', 'logicapp',\n  type =~ 'microsoft.storage/storageaccounts', 'storage',\n  type =~ 'microsoft.sql/servers/databases', 'sql-db',\n  type =~ 'microsoft.sql/servers', 'sql-server',\n  type\n)\n| project subscriptionId, Env=toupper(env), Region=region, resourceGroup, ResourceKind, type, kind, name, location, id, Plan=iif(type =~ 'microsoft.web/serverfarms', name, '');\n\nsites\n| union otherResources\n| order by Env asc, Region asc, ResourceKind asc, name asc",
         "size": 4,
         "queryType": 1,
         "resourceType": "microsoft.resourcegraph/resources",
