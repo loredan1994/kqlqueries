@@ -134,7 +134,7 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "query": "let envs = dynamic([ {Env} ]);\nResources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n| extend app = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 1, rg)\n| extend env = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 2, rg)\n| extend region = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where env in~ (envs)\n| summarize by region\n| order by region asc\n| project value=region, label=iif(region == 'legacy', 'LEGACY', region), selected=true",
+            "query": "let envs = dynamic([ {Env} ]);\nResources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n| extend app = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 1, rg)\n| extend env = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 2, rg)\n| extend region = extract(@'^rg-(.*)-(ut|st|uat|pp|pr)(?:-(.*))?$', 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where array_length(envs) == 0 or env in~ (envs)\n| summarize by region\n| order by region asc\n| project value=region, label=iif(region == 'legacy', 'LEGACY', region), selected=true",
             "crossComponentResources": [
               "{AppSubscriptions}"
             ],
