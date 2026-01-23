@@ -1,0 +1,245 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "## 🔭 SRE Cross-Subscription Dashboard\n\n**Architecture Handling:**\n* **Apps/AppInsights:** Located in `Subscription A` (Resource Group: `rg-<app>-<env>-<region>`)\n* **Log Analytics:** Located in `Subscription B` (Different RG)\n\n**Setup:**\n1. In **\"1. Subscriptions\"**, select **BOTH** the App subscriptions and the Log Analytics subscription.\n2. The dashboard will use Resource Graph to find your Apps, and the Workspace to find the logs."
+      },
+      "name": "text - instructions"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "crossComponentResources": [
+          "value::all"
+        ],
+        "parameters": [
+          {
+            "id": "1f74ed9a-e3ed-4d8d-b5cc-4f0573900358",
+            "version": "KqlParameterItem/1.0",
+            "name": "Subscriptions",
+            "label": "1. Subscriptions (Select All Relevant)",
+            "type": 6,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "typeSettings": {
+              "additionalResourceOptions": [
+                "value::all"
+              ],
+              "includeAll": true,
+              "showDefault": false
+            },
+            "value": [
+              "value::all"
+            ]
+          },
+          {
+            "id": "b6d6e2cc-6eaa-4a4d-b4bf-4cc2c75f1db0",
+            "version": "KqlParameterItem/1.0",
+            "name": "Workspace",
+            "label": "2. Log Analytics Workspace",
+            "type": 5,
+            "isRequired": true,
+            "multiSelect": false,
+            "query": "Resources\n| where type =~ 'microsoft.operationalinsights/workspaces'\n| project id, name, resourceGroup, subscriptionId\n| order by name asc\n| project value=id, label=name, selected=true",
+            "crossComponentResources": [
+              "{Subscriptions}"
+            ],
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            },
+            "queryType": 1,
+            "resourceType": "microsoft.resourcegraph/resources"
+          },
+          {
+            "id": "b0d4f1b9-5d64-4fb9-8d8b-6a2e4b2c4d11",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time range",
+            "type": 4,
+            "isRequired": true,
+            "isGlobal": true,
+            "typeSettings": {
+              "selectableValues": [
+                {
+                  "durationMs": 300000
+                },
+                {
+                  "durationMs": 900000
+                },
+                {
+                  "durationMs": 3600000
+                },
+                {
+                  "durationMs": 86400000
+                },
+                {
+                  "durationMs": 604800000
+                }
+              ]
+            },
+            "value": {
+              "durationMs": 86400000
+            }
+          },
+          {
+            "id": "2f9f1d7f-7b51-4f31-8d25-9b6f6d6ef1d2",
+            "version": "KqlParameterItem/1.0",
+            "name": "App",
+            "label": "3. App Name",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": false,
+            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n// Robust Regex: Matches 'rg-' then anything until it hits an environment tag\n| extend app = extract(@'^rg-(.+?)-(ut|st|pp|pr)-', 1, rg)\n| where isnotempty(app)\n| summarize by app\n| order by app asc\n| project value=app, label=app, selected=true",
+            "crossComponentResources": [
+              "{Subscriptions}"
+            ],
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            },
+            "queryType": 1,
+            "resourceType": "microsoft.resourcegraph/resources"
+          },
+          {
+            "id": "0f5f5c08-6a26-4d8b-9a2a-93a2c0e3d351",
+            "version": "KqlParameterItem/1.0",
+            "name": "Env",
+            "label": "Environment",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "jsonData": "[\n  {\"value\":\"ut\",\"label\":\"UT\",\"selected\":true},\n  {\"value\":\"st\",\"label\":\"ST\",\"selected\":true},\n  {\"value\":\"pp\",\"label\":\"PP\",\"selected\":true},\n  {\"value\":\"pr\",\"label\":\"PR\",\"selected\":true}\n]",
+            "value": [
+              "ut",
+              "st",
+              "pp",
+              "pr"
+            ]
+          },
+          {
+            "id": "f6de90aa-9d5c-4bb0-a54e-9b1f3b0cc7a2",
+            "version": "KqlParameterItem/1.0",
+            "name": "Region",
+            "label": "Region",
+            "type": 2,
+            "isRequired": true,
+            "multiSelect": true,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n// 1. Filter by App Name (Broad match to optimize speed)\n| where resourceGroup contains '{App}'\n| extend rg = tolower(resourceGroup)\n// 2. Exact Regex Extraction of Env and Region\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rg)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rg)\n// 3. Validation and Filtering\n| where isnotempty(env) and isnotempty(region)\n| where env in ({Env})\n// 4. Return unique regions found\n| summarize by region\n| order by region asc\n| project value=region, label=region, selected=true",
+            "crossComponentResources": [
+              "{Subscriptions}"
+            ],
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            },
+            "queryType": 1,
+            "resourceType": "microsoft.resourcegraph/resources"
+          }
+        ],
+        "style": "pills",
+        "queryType": 1,
+        "resourceType": "microsoft.resourcegraph/resources"
+      },
+      "name": "parameters"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Requests over time (Split by Env)",
+        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n// 1. Parse the Resource ID from the Log (this ID points to the original App Insight in Sub A)\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n// 2. Filter to ensure we only look at RGs matching the selected App\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| where rgLower matches regex strcat('^rg-', appLower, '-(ut|st|pp|pr)-')\n// 3. Extract Env and Region from the RG name\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rgLower)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rgLower)\n// 4. Apply Parameter Filters\n| where env in ({Env})\n| where region in ({Region})\n// 5. Visualize\n| extend Env = toupper(env)\n| summarize Requests=sum(ItemCount) by bin(TimeGenerated, 5m), Env\n| order by TimeGenerated asc",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "timechart",
+        "chartSettings": {
+          "showLegend": true
+        }
+      },
+      "name": "query - requests"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Failure Rate % (Split by Env)",
+        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg)\n| extend rgLower = tolower(rg)\n| where rgLower matches regex strcat('^rg-', appLower, '-(ut|st|pp|pr)-')\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rgLower)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rgLower)\n| where env in ({Env})\n| where region in ({Region})\n| extend Env = toupper(env)\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false) by bin(TimeGenerated, 5m), Env\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project TimeGenerated, Env, FailureRate",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "timechart"
+      },
+      "name": "query - failure-rate"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "title": "Detailed Component Status (Drill-down)",
+        "query": "let appLower = tolower('{App}');\nlet base = union isfuzzy=true AppRequests;\nbase\n| where TimeGenerated {TimeRange}\n| extend rid = tolower(_ResourceId)\n| extend subscriptionId = extract(@\"/subscriptions/([^/]+)/\", 1, rid)\n| extend rg = extract(@\"/resourcegroups/([^/]+)/\", 1, rid)\n| extend ai = extract(@\"/providers/microsoft.insights/components/([^/]+)$\", 1, rid)\n| where isnotempty(rg) and isnotempty(ai)\n| extend rgLower = tolower(rg)\n| where rgLower matches regex strcat('^rg-', appLower, '-(ut|st|pp|pr)-')\n| extend env = extract(@'-(ut|st|pp|pr)-', 1, rgLower)\n| extend region = extract(@'-(ut|st|pp|pr)-(.+)$', 2, rgLower)\n| where env in ({Env})\n| where region in ({Region})\n| summarize Requests=sum(ItemCount), Failures=sumif(ItemCount, Success == false), P95ms=percentile(DurationMs, 95) by subscriptionId, env, region, rg, ai\n| extend FailureRate = round(100.0 * todouble(Failures) / iif(Requests==0, 1.0, todouble(Requests)), 2)\n| project Subscription=subscriptionId, Env=toupper(env), Region=region, ResourceGroup=rg, AppInsightsResource=ai, Requests, Failures, FailureRate, P95ms=round(P95ms, 1)\n| order by Failures desc",
+        "size": 4,
+        "timeContextFromParameter": "TimeRange",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "{Workspace}"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "FailureRate",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": ">",
+                    "thresholdValue": "1",
+                    "representation": "3",
+                    "text": "{0}{1}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "success",
+                    "text": "{0}{1}"
+                  }
+                ]
+              },
+              "numberFormat": {
+                "unit": 1,
+                "style": "decimal",
+                "maximumFractionDigits": 2
+              }
+            }
+          ],
+          "filter": true
+        }
+      },
+      "name": "query - drilldown"
+    }
+  ],
+  "fallbackResourceIds": [
+    "Azure Monitor"
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}
