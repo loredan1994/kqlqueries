@@ -92,7 +92,7 @@
             "type": 2,
             "isRequired": false,
             "multiSelect": false,
-            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n| extend app = extract(@'^rg-(.*)-(ut|st|uat|pp|pr|prod|nonprod|np|dev|test|qa|stage|stg)(?:-([^-]+))?$', 1, rg)\n| where isnotempty(app)\n| summarize by app\n| order by app asc\n| project value=app, label=app",
+            "query": "let rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr|prod|nonprod|np|dev|test|qa|stage|stg)(?:-([^-]+))?$';\nResources\n| where type in~ (\n  'microsoft.web/sites',\n  'microsoft.web/serverfarms',\n  'microsoft.logic/workflows',\n  'microsoft.storage/storageaccounts',\n  'microsoft.sql/servers',\n  'microsoft.sql/servers/databases',\n  'microsoft.insights/components'\n)\n| extend rg = tolower(resourceGroup)\n| where rg startswith 'rg-'\n| extend app = extract(rgPattern, 1, rg)\n| where isnotempty(app)\n| summarize by app\n| order by app asc\n| project value=app, label=app",
             "crossComponentResources": [
               "{AppSubscriptions}"
             ],
@@ -113,7 +113,7 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "query": "Resources\n| where type =~ 'microsoft.insights/components'\n| where resourceGroup startswith 'rg-'\n| extend rg = tolower(resourceGroup)\n| extend app = extract(@'^rg-(.*)-(ut|st|uat|pp|pr|prod|nonprod|np|dev|test|qa|stage|stg)(?:-([^-]+))?$', 1, rg)\n| extend env = extract(@'^rg-(.*)-(ut|st|uat|pp|pr|prod|nonprod|np|dev|test|qa|stage|stg)(?:-([^-]+))?$', 2, rg)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| summarize by env\n| order by env asc\n| project value=env, label=toupper(env), selected=true",
+            "query": "let rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr|prod|nonprod|np|dev|test|qa|stage|stg)(?:-([^-]+))?$';\nResources\n| where type in~ (\n  'microsoft.web/sites',\n  'microsoft.web/serverfarms',\n  'microsoft.logic/workflows',\n  'microsoft.storage/storageaccounts',\n  'microsoft.sql/servers',\n  'microsoft.sql/servers/databases',\n  'microsoft.insights/components'\n)\n| extend rg = tolower(resourceGroup)\n| where rg startswith 'rg-'\n| extend app = extract(rgPattern, 1, rg)\n| extend env = extract(rgPattern, 2, rg)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| summarize by env\n| order by env asc\n| project value=env, label=toupper(env), selected=true",
             "crossComponentResources": [
               "{AppSubscriptions}"
             ],
@@ -134,7 +134,7 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "query": "let rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr|prod|nonprod|np|dev|test|qa|stage|stg)(?:-([^-]+))?$';\nResources\n| extend rg = tolower(resourceGroup)\n| where isnotempty(rg) and rg startswith 'rg-'\n| extend app = extract(rgPattern, 1, rg)\n| extend env = extract(rgPattern, 2, rg)\n| extend region = extract(rgPattern, 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| summarize by region\n| order by region asc\n| project value=region, label=iif(region == 'legacy', 'LEGACY', region), selected=true",
+            "query": "let rgPattern = @'^rg-(.*)-(ut|st|uat|pp|pr|prod|nonprod|np|dev|test|qa|stage|stg)(?:-([^-]+))?$';\nlet envs = dynamic([ {Env} ]);\nResources\n| where type in~ (\n  'microsoft.web/sites',\n  'microsoft.web/serverfarms',\n  'microsoft.logic/workflows',\n  'microsoft.storage/storageaccounts',\n  'microsoft.sql/servers',\n  'microsoft.sql/servers/databases',\n  'microsoft.insights/components'\n)\n| extend rg = tolower(resourceGroup)\n| where rg startswith 'rg-'\n| extend app = extract(rgPattern, 1, rg)\n| extend env = extract(rgPattern, 2, rg)\n| extend region = extract(rgPattern, 3, rg)\n| extend region = iif(isempty(region), 'legacy', region)\n| where isnotempty(app) and isnotempty(env)\n| where app == tolower('{App}')\n| where array_length(envs) == 0 or env in~ (envs)\n| summarize by region\n| order by region asc\n| project value=region, label=iif(region == 'legacy', 'LEGACY', region), selected=true",
             "crossComponentResources": [
               "{AppSubscriptions}"
             ],
